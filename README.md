@@ -2,7 +2,7 @@
 
 A reproducible setup for disposable AI-development containers on a headless Bazzite host (immutable, OSTree-based Fedora), driven by [DevPod](https://devpod.sh), accessed remotely over [Tailscale](https://tailscale.com).
 
-The goal: spin up project-specific, ephemeral workspaces ("livestock, not pets") where Claude Code runs with full in-container permissions, while the host OS stays pristine and broad-scope credentials never persist inside the container.
+The goal: spin up project-specific, ephemeral workspaces where Claude Code runs with full in-container permissions, while the host OS stays pristine and broad-scope credentials never persist inside the container.
 
 > Local clones on the host are inspection-only. Real work happens inside DevPod-managed containers that clone their own copy of the repo and spawn git worktrees internally.
 
@@ -161,7 +161,7 @@ See [Why no Claude pre-auth](#why-no-claude-pre-auth) above. Short version: `cla
 2. **Agent in container owns container config.** Host-authored `.devcontainer/` should be a deliberate minimal seed; the in-workspace agent extends it. The seed above is the bare minimum to bootstrap.
 3. **No bind mounts of source.** Container clones the repo itself, uses worktrees internally for branch-per-task work.
 4. **No broad-scope creds in container.** SSH agent forwarding for git; per-workspace login for Claude.
-5. **Workspaces are livestock.** When something breaks: `devpod delete WORKSPACE && devpod up git@github.com:OWNER/REPO.git`. Don't debug a sick container — recreate it.
+5. **Rebuild, don't repair.** When something breaks: `devpod delete WORKSPACE && devpod up git@github.com:OWNER/REPO.git`. Don't debug a misbehaving container.
 
 ---
 
