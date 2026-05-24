@@ -66,11 +66,20 @@ Tailscale runs its own SSH server bound to the tailnet interface only — port 2
 
 The project repo must contain a `.devcontainer/devcontainer.json` (see [Reference devcontainer](#reference-devcontainer) below for the minimum-viable seed).
 
+**Always pass `--id <stable-name>`** so the workspace identity is decoupled from the git URL/branch — without it, every branch you bootstrap from creates a separate workspace with a different slug, and your client SSH config has to track it. With `--id`, the workspace name stays the same forever.
+
 ```bash
-devpod up git@github.com:OWNER/REPO.git --ide none
+devpod up git@github.com:OWNER/REPO.git --ide none --id REPO
 devpod ssh REPO                                        # shell into the container
 claude                                                 # first run: walks you through device-flow login
 ```
+
+Bootstrap from a feature branch the same way — only the source URL changes, the workspace name stays put:
+```bash
+devpod up git@github.com:OWNER/REPO.git@some-branch --ide none --id REPO
+```
+
+Inside the container, switch tasks via `git worktree add` against the same repo — one container, many branches, all under `/workspaces/content/.worktrees/<task>`.
 
 The `claude` login is per-workspace (~10s via browser). We deliberately don't bake credentials into the container — see [Why no Claude pre-auth](#why-no-claude-pre-auth).
 
@@ -93,7 +102,7 @@ Host my-workspace
     ProxyCommand ssh USER@TAILNET_HOSTNAME "/home/USER/.local/bin/devpod ssh --stdio --user vscode --workdir /workspaces/content WORKSPACE_NAME"
 ```
 
-Replace `USER`, `TAILNET_HOSTNAME`, and `WORKSPACE_NAME` (it's the slug shown by `devpod list`). Then `ssh my-workspace` from the client drops you straight into the container.
+Replace `USER`, `TAILNET_HOSTNAME`, and `WORKSPACE_NAME` (the value you passed to `--id`). Then `ssh my-workspace` from the client drops you straight into the container. **Use `--id` when creating workspaces** — otherwise the workspace slug derives from the git URL and changes when you bootstrap from a branch, forcing you to edit this config every time.
 
 **VS Code / Cursor / JetBrains Gateway**: with the same SSH config in place, use the Remote-SSH extension's "Connect to Host…" → `my-workspace`. The IDE installs its remote server inside the container, full LSP/debugger/extensions run there, the UI is local.
 
