@@ -114,21 +114,20 @@ Minimal `.devcontainer/devcontainer.json` that works on Bazzite (rootless Podman
 
 ```jsonc
 {
-  "image": "mcr.microsoft.com/devcontainers/python:3",
+  "image": "mcr.microsoft.com/devcontainers/base:ubuntu",
   "workspaceMount": "source=${localWorkspaceFolder},target=/workspaces/${localWorkspaceFolderBasename},type=bind,relabel=private",
   "workspaceFolder": "/workspaces/${localWorkspaceFolderBasename}",
   "features": {
-    "ghcr.io/devcontainers/features/node:1": {},
     "ghcr.io/devcontainers/features/github-cli:1": {}
   },
   "mounts": [
-    "source=${localEnv:SSH_AUTH_SOCK},target=/ssh-auth-sock,type=bind,relabel=shared"
+    "source=/run/user/1000/ssh-agent.socket,target=/ssh-auth-sock,type=bind,relabel=shared"
   ],
   "containerEnv": {
     "SSH_AUTH_SOCK": "/ssh-auth-sock"
   },
   "runArgs": [
-    "--security-opt=no-new-privileges",
+    "--userns=keep-id",
     "--dns=1.1.1.1",
     "--dns=8.8.8.8"
   ],
@@ -139,24 +138,24 @@ Minimal `.devcontainer/devcontainer.json` that works on Bazzite (rootless Podman
 Five things to know:
 
 - **`relabel=private` on the workspace mount** is required for rootless Podman + SELinux. Without it the bind-mounted workspace ends up with `user_home_t` label and the container's `container_t` process gets denied. Equivalent to `:Z` in a manual `podman run -v`.
-- **SSH agent socket bind-mount** with `relabel=shared` (note: `shared`, not `private` — the host's ssh-agent process needs to keep serving the socket while the container reads from it). DevPod's docker provider does NOT auto-forward `$SSH_AUTH_SOCK` into rootless podman containers; this mount is what makes `git@github.com:...` clones / pushes work without baking in a token. **Requires the shell that runs `devpod up` to have `SSH_AUTH_SOCK` set** — interactive shells on systemd hosts do by default.
-- **`runArgs` hardening**: `no-new-privileges` prevents in-container setuid escalation (free win); explicit public DNS overrides the host's MagicDNS so the container can't name-resolve Tailscale peers. Blocks the common prompt-injection-driven recon path. Does **not** block raw-IP probes to 100.x.x.x — full network-namespace isolation would be a meaningfully larger change (see [Security trade-offs](#security-trade-offs) below).
-- **`curl … claude.ai/install.sh`** is the current official installer (native binary). The older `npm install -g @anthropic-ai/claude-code` path is deprecated as of 2026.
-- **Node + github-cli via standard features.** Both are needed for typical project work; the `claude-code` devcontainer feature is *not* used (failed install on this base — `npm` not detected even with node feature, install order isn't honored by DevPod 0.6.15). The `gh` CLI requires its own per-workspace `gh auth login` (device flow, ~10s — same pattern as `claude`) before commands like `gh pr create` work; SSH-agent-based `git push`/clone work without any gh auth.
+- **SSH agent socket bind-mount, hardcoded path.** `source=/run/user/1000/ssh-agent.socket` is host-specific (uid 1000 baked in — fine for a single-user dev box, parameterize elsewhere). **Do NOT use `${localEnv:SSH_AUTH_SOCK}`**: DevPod evaluates that substitution in a process where `SSH_AUTH_SOCK` has been overridden to its own ephemeral `/tmp/auth-agent.../listener.sock`, which is gone by the time podman tries to mount it — container fails to start. `relabel=shared` (not `private`) so the host's own ssh-agent process keeps access to the socket while the container reads from it.
+- **`--userns=keep-id`** is required for the SSH socket to actually be readable inside the container. Rootless podman's default uid mapping makes the bind-mounted socket (owned by host uid 1000) unreadable as the in-container `vscode` user (which maps to a host subuid range without keep-id). `keep-id` keeps UIDs stable across the namespace boundary — same flag a hand-rolled `podman run` script would use.
+- **No `--security-opt=no-new-privileges`.** It blocks `sudo` entirely (sudo needs setuid to escalate), which breaks the agent-in-container workflow that needs to `sudo apt install <dep>` on demand. Practical security loss is small — rootless podman already maps in-container root to an unprivileged host UID, so a setuid escalation can't reach host root.
+- **`curl … claude.ai/install.sh`** is the current official installer (native binary). The older `npm install -g @anthropic-ai/claude-code` is deprecated as of 2026. `gh` CLI is from the standard feature and requires its own per-workspace `gh auth login` (device flow, ~10s) before commands like `gh pr create` work; SSH-agent-based `git` clone/push work without `gh` auth. **Image base intentionally generic (`base:ubuntu`)**: a Python or Node project should set its own image and add features (e.g. `node:1`, `python:1`, `rust:1`) for its stack.
 
 ### Security trade-offs
 
 The reference config is **reasonably-isolated, not air-gapped**. What you get:
 
 - Rootless podman + user namespaces + seccomp + SELinux on the workspace mount.
-- No container-management sockets mounted; in-container processes have `CapEff=0`.
-- `no-new-privileges` prevents setuid escalation.
+- No container-management sockets mounted; in-container processes start with `CapEff=0`.
 - Host's MagicDNS overridden — Tailscale peers can't be name-resolved from inside.
 
-What you don't get (left out deliberately as overkill for a personal-trust workspace):
+What you don't get (deliberately):
 
+- **No `no-new-privileges`.** `sudo` is the way the in-container agent installs project dependencies on demand, and `no-new-privileges` blocks `sudo` entirely (it needs setuid). The hardening was tried and reverted.
 - **Tailnet IP isolation.** Container can still reach 100.x.x.x by raw IP if a process inside knows the address. If your tailnet hosts sensitive services and your container will run untrusted code, do the network-namespace work as a follow-up (1-3 hours of pasta config + verification matrix).
-- **Image supply-chain pinning.** We use `mcr.microsoft.com/devcontainers/python:3` (latest python:3); pin a SHA digest if you want byte-reproducible builds.
+- **Image supply-chain pinning.** We use `mcr.microsoft.com/devcontainers/base:ubuntu` (latest); pin a SHA digest if you want byte-reproducible builds.
 - **Outbound egress restriction.** Container can reach the whole internet. Add a host firewall rule (firewalld) if you need to allowlist specific destinations.
 
 The in-container agent (a `claude` session running inside the workspace) is expected to extend this seed with project-specific tooling, lifecycle hooks, and sibling services as a follow-up commit.
@@ -183,8 +182,10 @@ The principle: **broad-scope credentials never live in the container, and we don
 
 Container clones / pushes over `git@github.com:...` using the host's loaded ed25519 key via a bind-mounted ssh-agent socket. No token or private key in container fs; `devpod delete` leaves nothing behind.
 
-- **DevPod does not auto-forward `$SSH_AUTH_SOCK`** into rootless podman containers — you have to bind-mount the socket explicitly (see the reference devcontainer config above). An earlier draft of this doc said "DevPod forwards `$SSH_AUTH_SOCK`" without the mount; that was wrong, and inside such a container `ssh-add -l` would report no agent.
-- The mount uses `relabel=shared` (`:z`) because both the host's ssh-agent process and the container's ssh client need to use the socket concurrently. `relabel=private` (`:Z`) would lock the host out.
+- **DevPod's `devpod ssh` interactive session DOES auto-forward the agent** (it sets up `/tmp/auth-agent.../listener.sock` and points `SSH_AUTH_SOCK` at it during the session). The explicit mount is for **non-interactive contexts**: `devpod ssh --command`, postCreate, background scripts run outside an active SSH session — those don't see the per-session forwarding. With both in place, every process has agent access.
+- **Hardcoded source path required.** Use `source=/run/user/1000/ssh-agent.socket`, NOT `${localEnv:SSH_AUTH_SOCK}` — DevPod evaluates that substitution in a process where SSH_AUTH_SOCK has been overridden to its ephemeral `/tmp/auth-agent.../listener.sock`, gone by the time podman mounts.
+- **`relabel=shared`** (`:z`) — both host ssh-agent and container ssh client need concurrent socket access. `relabel=private` (`:Z`) would lock the host out.
+- **`--userns=keep-id` is mandatory with this mount** — without it the container's vscode user can't read the socket (UID maps don't line up).
 - Do **not** bind-mount `~/.config/gh` (long-lived OAuth, full user scope).
 - Do **not** bind-mount `~/.ssh` directory (private keys exposed). Mount only the agent socket.
 - For `gh`-based operations (`gh pr create`, `gh api ...`), do `gh auth login` once per workspace (device flow, ~10s). `git` operations don't need this — they use the SSH agent.
@@ -227,6 +228,9 @@ ujust clean-system                         # Bazzite housekeeping (purges old im
 ## Known gotchas
 
 - **`devpod up --recreate` keeps the cached image.** If you change `features` in `devcontainer.json`, `--recreate` may reuse the prior image. Use `--reset` to force a full rebuild.
+- **DevPod caches the cloned source under `~/.devpod/agent/contexts/default/workspaces/<id>/content/`** and `devpod delete` doesn't always wipe it. If your `devcontainer.json` changes don't seem to be picked up even after `--reset`, also `rm -rf` that directory and re-up.
 - **DevPod 0.6.15 ignores `overrideFeatureInstallOrder`.** Don't rely on it; install dependent things via `postCreateCommand` instead of stacking features.
+- **Do not use `${containerEnv:PATH}` substitution.** DevPod doesn't expand it to the image's default PATH — it resolves to empty, which wipes `/bin` and `/usr/bin` and crashes the container at start (DevPod's own keep-alive `sleep` command fails). If you need to extend PATH, do it in `~/.bashrc` via postCreate.
 - **DevPod's `--stdio` is the right primitive for SSH chaining.** Don't try to expose the container's sshd on a port; use ProxyCommand.
 - **Post-quantum SSH warning** when connecting via Remote-SSH. The container's sshd doesn't advertise PQ key-exchange yet; OpenSSH 10+ clients warn but the connection still works fine. Harmless for tailnet-only use.
+- **Run `devpod up` from a shell where `SSH_AUTH_SOCK` is set** so the bind mount source can resolve at host level. Interactive shells on systemd hosts have it; scripts/cron need an explicit `export SSH_AUTH_SOCK=/run/user/$(id -u)/ssh-agent.socket`.
