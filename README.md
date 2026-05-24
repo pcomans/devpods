@@ -111,15 +111,36 @@ Minimal `.devcontainer/devcontainer.json` that works on Bazzite (rootless Podman
   "features": {
     "ghcr.io/devcontainers/features/node:1": {}
   },
+  "runArgs": [
+    "--security-opt=no-new-privileges",
+    "--dns=1.1.1.1",
+    "--dns=8.8.8.8"
+  ],
   "postCreateCommand": "curl -fsSL https://claude.ai/install.sh | bash"
 }
 ```
 
-Three things to know:
+Four things to know:
 
 - **`relabel=private` on the workspace mount** is required for rootless Podman + SELinux. Without it the bind-mounted workspace ends up with `user_home_t` label and the container's `container_t` process gets denied. Equivalent to `:Z` in a manual `podman run -v`.
+- **`runArgs` hardening**: `no-new-privileges` prevents in-container setuid escalation (free win); explicit public DNS overrides the host's MagicDNS so the container can't name-resolve Tailscale peers. Blocks the common prompt-injection-driven recon path. Does **not** block raw-IP probes to 100.x.x.x — full network-namespace isolation would be a meaningfully larger change (see [Security trade-offs](#security-trade-offs) below).
 - **`curl … claude.ai/install.sh`** is the current official installer (native binary). The older `npm install -g @anthropic-ai/claude-code` path is deprecated as of 2026.
 - **Node is included via the devcontainers feature**, not the deprecated `claude-code` devcontainer feature. Most real projects need node anyway (web tooling); the claude installer is standalone and doesn't depend on it.
+
+### Security trade-offs
+
+The reference config is **reasonably-isolated, not air-gapped**. What you get:
+
+- Rootless podman + user namespaces + seccomp + SELinux on the workspace mount.
+- No container-management sockets mounted; in-container processes have `CapEff=0`.
+- `no-new-privileges` prevents setuid escalation.
+- Host's MagicDNS overridden — Tailscale peers can't be name-resolved from inside.
+
+What you don't get (left out deliberately as overkill for a personal-trust workspace):
+
+- **Tailnet IP isolation.** Container can still reach 100.x.x.x by raw IP if a process inside knows the address. If your tailnet hosts sensitive services and your container will run untrusted code, do the network-namespace work as a follow-up (1-3 hours of pasta config + verification matrix).
+- **Image supply-chain pinning.** We use `mcr.microsoft.com/devcontainers/python:3` (latest python:3); pin a SHA digest if you want byte-reproducible builds.
+- **Outbound egress restriction.** Container can reach the whole internet. Add a host firewall rule (firewalld) if you need to allowlist specific destinations.
 
 The in-container agent (a `claude` session running inside the workspace) is expected to extend this seed with project-specific tooling, lifecycle hooks, and sibling services as a follow-up commit.
 
