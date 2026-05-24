@@ -118,7 +118,14 @@ Minimal `.devcontainer/devcontainer.json` that works on Bazzite (rootless Podman
   "workspaceMount": "source=${localWorkspaceFolder},target=/workspaces/${localWorkspaceFolderBasename},type=bind,relabel=private",
   "workspaceFolder": "/workspaces/${localWorkspaceFolderBasename}",
   "features": {
-    "ghcr.io/devcontainers/features/node:1": {}
+    "ghcr.io/devcontainers/features/node:1": {},
+    "ghcr.io/devcontainers/features/github-cli:1": {}
+  },
+  "mounts": [
+    "source=${localEnv:SSH_AUTH_SOCK},target=/ssh-auth-sock,type=bind,relabel=shared"
+  ],
+  "containerEnv": {
+    "SSH_AUTH_SOCK": "/ssh-auth-sock"
   },
   "runArgs": [
     "--security-opt=no-new-privileges",
@@ -129,12 +136,13 @@ Minimal `.devcontainer/devcontainer.json` that works on Bazzite (rootless Podman
 }
 ```
 
-Four things to know:
+Five things to know:
 
 - **`relabel=private` on the workspace mount** is required for rootless Podman + SELinux. Without it the bind-mounted workspace ends up with `user_home_t` label and the container's `container_t` process gets denied. Equivalent to `:Z` in a manual `podman run -v`.
+- **SSH agent socket bind-mount** with `relabel=shared` (note: `shared`, not `private` — the host's ssh-agent process needs to keep serving the socket while the container reads from it). DevPod's docker provider does NOT auto-forward `$SSH_AUTH_SOCK` into rootless podman containers; this mount is what makes `git@github.com:...` clones / pushes work without baking in a token. **Requires the shell that runs `devpod up` to have `SSH_AUTH_SOCK` set** — interactive shells on systemd hosts do by default.
 - **`runArgs` hardening**: `no-new-privileges` prevents in-container setuid escalation (free win); explicit public DNS overrides the host's MagicDNS so the container can't name-resolve Tailscale peers. Blocks the common prompt-injection-driven recon path. Does **not** block raw-IP probes to 100.x.x.x — full network-namespace isolation would be a meaningfully larger change (see [Security trade-offs](#security-trade-offs) below).
 - **`curl … claude.ai/install.sh`** is the current official installer (native binary). The older `npm install -g @anthropic-ai/claude-code` path is deprecated as of 2026.
-- **Node is included via the devcontainers feature**, not the deprecated `claude-code` devcontainer feature. Most real projects need node anyway (web tooling); the claude installer is standalone and doesn't depend on it.
+- **Node + github-cli via standard features.** Both are needed for typical project work; the `claude-code` devcontainer feature is *not* used (failed install on this base — `npm` not detected even with node feature, install order isn't honored by DevPod 0.6.15). The `gh` CLI requires its own per-workspace `gh auth login` (device flow, ~10s — same pattern as `claude`) before commands like `gh pr create` work; SSH-agent-based `git push`/clone work without any gh auth.
 
 ### Security trade-offs
 
@@ -171,13 +179,16 @@ We tried two patterns and abandoned both:
 
 The principle: **broad-scope credentials never live in the container, and we don't try to be clever about narrower ones either.**
 
-### GitHub — SSH agent forwarding
+### GitHub — SSH agent socket bind-mount
 
-Container clones over `git@github.com:...`. DevPod forwards `$SSH_AUTH_SOCK`. No token in container fs. `devpod delete` leaves nothing behind.
+Container clones / pushes over `git@github.com:...` using the host's loaded ed25519 key via a bind-mounted ssh-agent socket. No token or private key in container fs; `devpod delete` leaves nothing behind.
 
+- **DevPod does not auto-forward `$SSH_AUTH_SOCK`** into rootless podman containers — you have to bind-mount the socket explicitly (see the reference devcontainer config above). An earlier draft of this doc said "DevPod forwards `$SSH_AUTH_SOCK`" without the mount; that was wrong, and inside such a container `ssh-add -l` would report no agent.
+- The mount uses `relabel=shared` (`:z`) because both the host's ssh-agent process and the container's ssh client need to use the socket concurrently. `relabel=private` (`:Z`) would lock the host out.
 - Do **not** bind-mount `~/.config/gh` (long-lived OAuth, full user scope).
-- Do **not** bind-mount `~/.ssh` (private keys exposed).
-- If HTTPS is forced (CI etc.), use a fine-grained PAT scoped to the single repo with ≤30-day expiry, injected via `remoteEnv`.
+- Do **not** bind-mount `~/.ssh` directory (private keys exposed). Mount only the agent socket.
+- For `gh`-based operations (`gh pr create`, `gh api ...`), do `gh auth login` once per workspace (device flow, ~10s). `git` operations don't need this — they use the SSH agent.
+- If HTTPS is forced (CI etc.), use a fine-grained PAT scoped to the single repo with ≤30-day expiry, injected via `containerEnv`.
 
 ### Claude Max — per-workspace login
 
