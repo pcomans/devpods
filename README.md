@@ -225,6 +225,70 @@ Closest related issues: [loft-sh/devpod#1611](https://github.com/loft-sh/devpod/
 
 ---
 
+## Safety hooks for agents using this setup
+
+If you let a Claude Code (or similar) agent operate against this host, install the **bulk-rmi guard hook** to prevent a single bad command from wiping every workspace's container image at once.
+
+### The incident this prevents
+
+On 2026-05-27, an agent ran:
+
+```bash
+podman images --filter "reference=localhost/vsc-content-*" -q | xargs -r podman rmi -f
+```
+
+…intending to clean up one workspace's cached image. That filter matches **every DevPod-built image on the host**, so `xargs rmi -f` simultaneously destroyed the runtime images for three live workspaces. None of the workspaces' source-code clones were lost (cached under `~/.devpod/agent/...` and on GitHub), but every container's filesystem state — injected API keys, agent bashrc additions, in-progress session state — vanished. Real ~30 minutes of recovery work, and the only reason data survived was that the agent had pushed commits earlier.
+
+### Install
+
+```bash
+mkdir -p ~/.claude/hooks
+cp hooks/block-vsc-content-bulk-rmi.sh ~/.claude/hooks/
+chmod +x ~/.claude/hooks/block-vsc-content-bulk-rmi.sh
+```
+
+Add to `~/.claude/settings.json` (merge with existing keys):
+
+```jsonc
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/home/<USER>/.claude/hooks/block-vsc-content-bulk-rmi.sh",
+            "timeout": 5
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
+Then open Claude Code's `/hooks` menu once (forces a settings reload), or restart.
+
+### What it does
+
+- **Blocks**: any `podman rmi` / `podman image rm` / `podman image prune` whose command line mentions `vsc-content`. Covers the original filter pattern, the `grep vsc-content` variant, and other shapes that target DevPod-built images en masse.
+- **Allows**: `podman rmi <hash-or-tag>` for a specific image; any `podman` command that isn't an rmi-class operation; everything unrelated to podman.
+- **Escape hatch**: prefix the command with `DANGEROUS_CONFIRMED=1` to override the block when you really mean it. The block message tells the user this.
+- **Output on block**: exits 2 with a stderr message listing safer alternatives (`devpod up <name> --reset` for single-workspace rebuilds, `podman images --filter` to inspect before delete, etc.). The agent sees the explanation and re-plans.
+
+### Verify it's wired up
+
+After install + restart:
+
+```bash
+echo '{"tool_name":"Bash","tool_input":{"command":"podman images --filter \"reference=localhost/vsc-content-*\" -q | xargs podman rmi -f"}}' \
+  | ~/.claude/hooks/block-vsc-content-bulk-rmi.sh
+echo "rc=$?"   # should be 2
+```
+
+---
+
 ## Principles (do not violate)
 
 1. **Host stays pristine.** No `rpm-ostree install` for dev tooling. Everything in `~/.local/bin`, Homebrew, or containers.
