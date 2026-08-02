@@ -1,0 +1,8 @@
+{
+  "name": "git-credentials",
+  "description": "DevPod git/gh credential handling and troubleshooting for this host's Bazzite devcontainers",
+  "version": "1.0.0",
+  "author": {
+    "name": "pcomans"
+  }
+}
