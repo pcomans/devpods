@@ -67,7 +67,20 @@ ssh -T git@github.com                                  # should greet you by use
 
 (Inside the container you'll use HTTPS remotes via DevPod's credential injection, not SSH. This key is for host-side `git` operations and for tools like `gh` itself.)
 
-### 6. Enable Tailscale SSH (for remote access)
+### 6. Wire up dotfiles
+
+DevPod has a separate global bootstrap mechanism from `devcontainer.json`: it clones a dotfiles repo into `~/dotfiles` inside **every** workspace and runs a script there on every `devpod up`, regardless of whether that workspace's own repo has a devcontainer.json at all. This repo's own [`dotfiles/`](dotfiles/) directory is that bootstrap — currently just the `xterm-ghostty` terminfo entry and the tmux truecolor fix (see [Known gotchas](#known-gotchas-beyond-the-procacpi-saga)).
+
+```bash
+devpod context set-options \
+  -o DOTFILES_URL=https://github.com/pcomans/devpods.git \
+  -o DOTFILES_SCRIPT=dotfiles/install.sh
+devpod context options | grep -iE "DOTFILES"
+```
+
+`DOTFILES_SCRIPT` is relative to the repo root, so this works even though `dotfiles/` isn't at the top level. DevPod does **not** `git pull` an already-cloned `~/dotfiles` on repeat `up`s — only `install.sh` re-runs — so changes here reach existing workspaces only via `devpod up <workspace> --recreate` (which wipes and re-clones the container's home directory) or a manual `rm -rf ~/dotfiles && devpod up`.
+
+### 7. Enable Tailscale SSH (for remote access)
 
 ```bash
 sudo tailscale set --ssh
@@ -75,7 +88,7 @@ sudo tailscale set --ssh
 
 Tailscale runs its own SSH server bound to the tailnet interface only — port 22 stays closed to LAN and internet.
 
-### 7. Spin up your first workspace
+### 8. Spin up your first workspace
 
 The project repo must contain a `.devcontainer/devcontainer.json` (see [Reference devcontainer](#reference-devcontainer) below for the minimum-viable seed).
 
@@ -357,3 +370,4 @@ ujust clean-system                         # purges old images/volumes
 - **DevPod's `--stdio` is the right primitive for SSH chaining.** Don't expose the container's sshd on a port.
 - **Post-quantum SSH warning** on Remote-SSH from OpenSSH 10+ clients. Harmless for tailnet-only use; ignore.
 - **In-container `sudo` works without configuration** in `mcr.microsoft.com/devcontainers/base:ubuntu` (and other MS devcontainer base images) — the `vscode` user has passwordless sudo pre-configured.
+- **A long-lived tmux session can get truecolor rendering permanently wrong for a client that reconnects later.** tmux negotiates RGB/truecolor support against whichever client was attached when its *server* first started, and that negotiation sticks for the server's whole lifetime — even once a different, fully terminfo'd client (e.g. Ghostty) attaches to the same session afterward. Symptom: garbled/garbage characters, most visibly at the left margin where redraws and prompt lines land, because tmux emits truecolor SGR codes the currently-attached client was never told to expect. Fixed at the dotfiles level (see [Wire up dotfiles](#6-wire-up-dotfiles)) with an explicit `default-terminal`/`terminal-overrides` pair in `dotfiles/tmux.conf`, but that only takes effect for a *new* server — an already-running one needs `tmux kill-server` (drops all sessions) or, less disruptively, `tmux source-file ~/.tmux.conf` plus a detach/reattach of the affected client.
