@@ -199,6 +199,32 @@ EOF
 
 Keys flow through the encrypted DevPod tunnel; never touch devcontainer.json. Re-run after each `devpod delete`/recreate (container fs is wiped).
 
+### `git-credentials` skill — teach the in-container agent this, not just you
+
+Everything above is easy for a human to internalize once and easy for an agent inside the container
+to get wrong every single time it hits an auth failure fresh, especially the non-obvious part: DevPod's
+credential/SSH-agent forwarding only exists inside a process tree started by `devpod ssh` — it's
+invisible to a bare shell attached to the container by any other means, even though that shell looks
+identical from inside. An agent that doesn't know this will try things it shouldn't: reading SSH keys,
+asking the user for a token, or reporting "credentials broken" when the actual fix is "reconnect
+through `devpod ssh`."
+
+This repo ships that knowledge as a plugin (`plugins/git-credentials/`) with a skill that loads only
+when relevant (~190 tokens always-on for the listing, ~1k on invoke — see `claude plugin details
+git-credentials@devpods`), not a project CLAUDE.md entry that would cost context on every unrelated
+turn. Install it once per workspace, in `postCreateCommand`, alongside any other tool installs:
+
+```bash
+claude plugin marketplace add pcomans/devpods
+claude plugin install git-credentials@devpods --scope user
+```
+
+Both are non-interactive `claude plugin` CLI subcommands (distinct from the interactive `/plugin`
+slash commands), so they work unattended in `postCreateCommand`. See
+`plugins/git-credentials/skills/git-credentials/SKILL.md` for the actual content, and
+[Create and distribute a plugin marketplace](https://code.claude.com/docs/en/plugin-marketplaces) for
+how the marketplace/plugin structure works if you want to add more skills here later.
+
 ---
 
 ## The `/proc/acpi` saga
