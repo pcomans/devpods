@@ -290,6 +290,8 @@ The `config.toml` write is guarded two ways, both load-bearing:
 
 **Revisit when [#508](https://github.com/openai/codex-plugin-cc/pull/508) merges upstream** — switch back to `claude plugin marketplace add openai/codex-plugin-cc` directly.
 
+**Caveat found after shipping this**: the fix only unblocks a *flagless* task call. **Neither `/codex:review` nor `/codex:rescue` actually work** — both always pass an explicit sandbox mode (`read-only` or `workspace-write`), and *any* explicit mode still tries to construct a real bubblewrap sandbox, which still fails here. Verified: `task` (no flag) works; `task --read-only` and `task --write` both still hit `bwrap: Can't mount devpts`. Until the container gets real bubblewrap support (Option A above, not adopted), the only way to use Codex here is a direct, flagless companion-script call — which is also fully unsandboxed, since flagless defers to `~/.codex/config.toml`'s `danger-full-access`. See the report's third addendum for the full trade-off and the two alternatives considered and rejected.
+
 ---
 
 ## Safety hooks for agents using this setup

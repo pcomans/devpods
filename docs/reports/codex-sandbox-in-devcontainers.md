@@ -40,6 +40,50 @@ workspace mount).
 Note the irony driving this request: **the container is already the isolation
 boundary.** Codex's inner sandbox is redundant here, and it is the thing failing.
 
+### Update (plugin 1.0.6): the flagless path already works, but nothing in the plugin's UI takes it
+
+Plugin 1.0.6 stopped hardcoding the sandbox mode. `codex-companion.mjs:491` now
+reads:
+
+```js
+sandbox: request.write ? "workspace-write" : request.readOnly ? "read-only" : null
+```
+
+and `lib/codex.mjs:68,81` default to `null` rather than `"read-only"`. Measured
+in this container:
+
+| Invocation | Sandbox param | Result |
+|---|---|---|
+| `task` (no flag) | `null` | **works** — command runs, no bubblewrap |
+| `task --read-only` | `"read-only"` | `bwrap: Can't mount devpts` |
+| `task --write` | `"workspace-write"` | `bwrap: Can't mount devpts` |
+
+So **any explicit sandbox mode forces bubblewrap and fails; `null` skips it.**
+This is not about project trust — a flagless run succeeds in a fresh git repo
+that is not listed under `[projects.*]` in `~/.codex/config.toml`.
+
+**This is why `codex:rescue` still fails.** Its agent definition
+(`agents/codex-rescue.md`) instructs it to *always* pass one of the two flags:
+`--write` by default, or `--read-only` for "review, diagnosis, or research".
+Every route it can take is an explicit mode, so the 1.0.6 change never helps it.
+
+**`codex:review` fails the same way, unconditionally** — `codex-companion.mjs:414`
+hardcodes `sandbox: "read-only"` for it with no override at all (deliberately,
+per the upstream PR's design — see the third addendum below for why). There is
+no flag or config path to make `/codex:review` skip bubblewrap.
+
+Net effect: **neither of the plugin's two user-facing commands work in this
+container.** Only a direct, flagless call to the companion script does:
+
+```bash
+node ~/.claude/plugins/cache/openai-codex/codex/1.0.6/scripts/codex-companion.mjs \
+  task --fresh "<prompt>"
+```
+
+The trade-off is that this also drops the read-only guarantee — the run is
+unsandboxed, so it can write. In a disposable devpod that is usually fine, but
+it is a real difference from what `--read-only`/`/codex:review` were asking for.
+
 ## Two ways to fix, and which to pick
 
 ### Option A — give the container what bubblewrap needs (recommended)
@@ -173,3 +217,11 @@ sandbox_mode = "danger-full-access"   # <- this is tui.model_availability_nux.sa
 ```
 
 Codex silently ignores a `sandbox_mode` in the wrong table — no error, it just doesn't take effect. The fix (already folded into the README's recipe above) checks for any existing `[table]` header and inserts the new key before it, so it always lands at the top level regardless of what's already in the file. Verified against a fresh file, an empty file, a nonexistent file, and a file with existing tables — correct and idempotent in all four cases.
+
+## Third addendum: the fix doesn't cover `/codex:review` or `/codex:rescue` — accepted as-is (2026-08-05)
+
+Confirmed independently (see the "Update (plugin 1.0.6)" section above, added by the in-container agent that hit this and traced it properly): the pinned-fork fix only unblocks the *flagless* code path, which neither `/codex:review` (always hardcoded read-only) nor `/codex:rescue` (its agent instructions always pass `--write` or `--read-only`) ever takes. Re-verified live: `task` (no flag) works, `task --read-only` and `task --write` both still hit `bwrap: Can't mount devpts`.
+
+Decision: **live with it.** Call the companion script directly with a flagless `task` for now, instead of `/codex:review` or `/codex:rescue`, accepting that this drops the read-only guarantee (every codex invocation here is effectively `danger-full-access`, since `null` defers to `~/.codex/config.toml`). No further container or plugin changes made. The two rejected alternatives, for the record:
+- **Patch `codex-companion.mjs`'s review path to also go flagless** — would restore `/codex:review` as a usable command, but explicitly defeats the read-only guarantee the upstream fix (PR #508) deliberately preserved for review. Same net exposure as living with the workaround, just reached through the normal command instead of a manual script call.
+- **Revisit the container-level `--cap-add=SYS_ADMIN` + `--security-opt label=disable` fix** — would restore *actual* sandboxed read-only enforcement instead of removing it, but reintroduces the broad, ongoing container-isolation trade-off this whole investigation was trying to avoid.
