@@ -264,6 +264,30 @@ Closest related issues: [loft-sh/devpod#1611](https://github.com/loft-sh/devpod/
 
 ---
 
+## The Claude Code `codex` plugin's sandbox is broken here — and how it's fixed
+
+**Symptom**: the `codex` plugin (from `openai/codex-plugin-cc`) authenticates fine, then every shell command it tries to run is blocked before execution — it falls back to useless web searches instead. The plugin hardcodes its sandbox mode per-request (`read-only` for reviews, `workspace-write` for write tasks), overriding `~/.codex/config.toml` entirely, and none of those modes can actually construct a working [bubblewrap](https://github.com/containers/bubblewrap) sandbox in this container: it needs `CAP_SYS_ADMIN` to mount `devpts`, which an unprivileged container user doesn't have, and is separately blocked by the SELinux `container_t` policy.
+
+**Rejected fix**: granting the container `CAP_SYS_ADMIN` + `--security-opt label=disable` (disabling SELinux confinement) makes bubblewrap work, but it's a real, ongoing reduction in host isolation for every workspace that inherits it — not something to put in a shared reference template. (Full diagnosis, including the rejected fix and why: [`docs/reports/codex-sandbox-in-devcontainers.md`](docs/reports/codex-sandbox-in-devcontainers.md).)
+
+**Actual fix**: this is a well-known, actively-tracked upstream bug ([openai/codex-plugin-cc#482](https://github.com/openai/codex-plugin-cc/issues/482) and others), with an open, reviewed, tested fix already written but not yet merged: [openai/codex-plugin-cc#508](https://github.com/openai/codex-plugin-cc/pull/508). It makes the plugin properly defer to `sandbox_mode` in `~/.codex/config.toml` instead of hardcoding it — Codex's own `danger-full-access` mode skips bubblewrap's sandbox construction entirely, so there's no container privilege needed at all. Install the plugin from that fix, pinned to the exact commit (not the branch):
+
+```bash
+rm -rf ~/.claude/plugins/marketplaces/cubicj-codex-plugin-cc
+git clone https://github.com/cubicj/codex-plugin-cc.git ~/.claude/plugins/marketplaces/cubicj-codex-plugin-cc
+(cd ~/.claude/plugins/marketplaces/cubicj-codex-plugin-cc && git checkout e5ce2723f7a174ba6b616c84ef8abb1771b2471e)
+claude plugin marketplace add ~/.claude/plugins/marketplaces/cubicj-codex-plugin-cc
+claude plugin install codex@openai-codex --scope user
+mkdir -p ~/.codex
+grep -q "^sandbox_mode" ~/.codex/config.toml 2>/dev/null || printf 'sandbox_mode = "danger-full-access"\n' >> ~/.codex/config.toml
+```
+
+`claude plugin marketplace add owner/repo#<ref>` only resolves branch/tag refs, not arbitrary commit SHAs — hence the manual clone + checkout + local-path registration, which pins the exact commit and is immune to a future force-push on the branch. The `config.toml` write is guarded so repeat `postCreateCommand` runs don't produce duplicate (TOML-breaking) keys.
+
+**Revisit when [#508](https://github.com/openai/codex-plugin-cc/pull/508) merges upstream** — switch back to `claude plugin marketplace add openai/codex-plugin-cc` directly.
+
+---
+
 ## Safety hooks for agents using this setup
 
 If you let a Claude Code (or similar) agent operate against this host, install the **bulk-rmi guard hook** to prevent a single bad command from wiping every workspace's container image at once.
