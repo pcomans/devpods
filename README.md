@@ -279,10 +279,14 @@ git clone https://github.com/cubicj/codex-plugin-cc.git ~/.claude/plugins/market
 claude plugin marketplace add ~/.claude/plugins/marketplaces/cubicj-codex-plugin-cc
 claude plugin install codex@openai-codex --scope user
 mkdir -p ~/.codex
-grep -q "^sandbox_mode" ~/.codex/config.toml 2>/dev/null || printf 'sandbox_mode = "danger-full-access"\n' >> ~/.codex/config.toml
+grep -q "^sandbox_mode" ~/.codex/config.toml 2>/dev/null || (grep -q "^\[" ~/.codex/config.toml 2>/dev/null && sed -i "0,/^\[/s//sandbox_mode = \"danger-full-access\"\n[/" ~/.codex/config.toml || printf 'sandbox_mode = "danger-full-access"\n' >> ~/.codex/config.toml)
 ```
 
-`claude plugin marketplace add owner/repo#<ref>` only resolves branch/tag refs, not arbitrary commit SHAs — hence the manual clone + checkout + local-path registration, which pins the exact commit and is immune to a future force-push on the branch. The `config.toml` write is guarded so repeat `postCreateCommand` runs don't produce duplicate (TOML-breaking) keys.
+`claude plugin marketplace add owner/repo#<ref>` only resolves branch/tag refs, not arbitrary commit SHAs — hence the manual clone + checkout + local-path registration, which pins the exact commit and is immune to a future force-push on the branch.
+
+The `config.toml` write is guarded two ways, both load-bearing:
+- The `grep -q "^sandbox_mode"` check makes repeat `postCreateCommand` runs a no-op instead of appending duplicate keys.
+- A blind `printf ... >> config.toml` isn't safe even the *first* time: if `codex` has already run once and written a `[projects."..."]` or `[tui...]` table (which happens automatically, before you'd ever think to check), a plain append lands the new key *inside* that last table instead of at the top level — silently producing `tui.model_availability_nux.sandbox_mode` instead of a global `sandbox_mode`, which Codex then just ignores. Reproduced this exact failure live when applying this recipe to a second workspace that had already been used interactively. The `sed` branch above finds the first `[table]` header (if any) and inserts before it, so the key always lands at the top level regardless of what's already in the file.
 
 **Revisit when [#508](https://github.com/openai/codex-plugin-cc/pull/508) merges upstream** — switch back to `claude plugin marketplace add openai/codex-plugin-cc` directly.
 

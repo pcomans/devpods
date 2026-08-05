@@ -156,3 +156,20 @@ Diff reviewed line-by-line before use: no network calls, no credential access, a
 No `runArgs` changes. No SELinux changes. Verified end-to-end live before persisting anything: `node .../codex-companion.mjs task --fresh "echo SANDBOX_PROBE_OK"` actually executes and returns output.
 
 **Revisit when** [openai/codex-plugin-cc#508](https://github.com/openai/codex-plugin-cc/pull/508) merges upstream — switch back to installing from `openai/codex-plugin-cc` directly and drop the pinned-fork step.
+
+## Second addendum: the config.toml write itself had a bug (2026-08-05)
+
+Rolling this out to a second workspace (`zelligent`) surfaced a real bug in the `~/.codex/config.toml` write above: a blind `printf ... >> config.toml` isn't TOML-safe. If `codex` had already run interactively before this line executes — which had happened on `zelligent`, where `config.toml` already had `[projects."..."]` and `[tui...]` tables from prior use — the appended `sandbox_mode` line lands *inside whatever table is last in the file*, not at the top level. Reproduced directly:
+
+```
+model = "gpt-5.6-sol"
+[projects."/workspaces/content"]
+trust_level = "trusted"
+
+[tui.model_availability_nux]
+"gpt-5.5" = 1
+"gpt-5.6-sol" = 2
+sandbox_mode = "danger-full-access"   # <- this is tui.model_availability_nux.sandbox_mode, not global!
+```
+
+Codex silently ignores a `sandbox_mode` in the wrong table — no error, it just doesn't take effect. The fix (already folded into the README's recipe above) checks for any existing `[table]` header and inserts the new key before it, so it always lands at the top level regardless of what's already in the file. Verified against a fresh file, an empty file, a nonexistent file, and a file with existing tables — correct and idempotent in all four cases.
