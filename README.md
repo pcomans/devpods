@@ -148,14 +148,15 @@ Minimal `.devcontainer/devcontainer.json` that works on Bazzite (rootless Podman
     "--dns=1.1.1.1",
     "--dns=8.8.8.8"
   ],
-  "postCreateCommand": "curl -fsSL https://claude.ai/install.sh | bash"
+  "postCreateCommand": "curl -fsSL https://claude.ai/install.sh | bash && curl -fsSL https://chatgpt.com/codex/install.sh | sh"
 }
 ```
 
-Three things to know:
+Things to know:
 
 - **`relabel=private` on the workspace mount** is required for rootless Podman + SELinux. Without it the bind-mounted workspace ends up with `user_home_t` label and the container's `container_t` process gets denied. Equivalent to `:Z` in a manual `podman run -v`.
 - **DNS override (`1.1.1.1` / `8.8.8.8`)** prevents the container from name-resolving Tailscale peers via the host's MagicDNS. Blocks the common prompt-injection-driven recon path. Does not block raw-IP probes to `100.x.x.x` — full network-namespace isolation would be a meaningfully larger change.
+- **`curl … chatgpt.com/codex/install.sh`** is the official Codex CLI installer (binary in `~/.local/bin`, no Node needed). Log in once per workspace with `codex login --device-auth`; logins are deliberately not shared between workspaces.
 - **`curl … claude.ai/install.sh`** is the current official Claude Code installer (native binary). `npm install -g @anthropic-ai/claude-code` is deprecated as of 2026. Image base intentionally generic — Python or Node projects should set their own image and add features (`node:1`, `python:1`, `rust:1`).
 
 ### What's deliberately *not* in there
