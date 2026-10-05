@@ -148,15 +148,17 @@ Minimal `.devcontainer/devcontainer.json` that works on Bazzite (rootless Podman
     "--dns=1.1.1.1",
     "--dns=8.8.8.8"
   ],
-  "postCreateCommand": "curl -fsSL https://claude.ai/install.sh | bash"
+  "postCreateCommand": "bash -o pipefail -c 'curl -fsSL https://claude.ai/install.sh | bash && curl -fsSL https://chatgpt.com/codex/install.sh | sh'"
 }
 ```
 
-Three things to know:
+Things to know:
 
 - **`relabel=private` on the workspace mount** is required for rootless Podman + SELinux. Without it the bind-mounted workspace ends up with `user_home_t` label and the container's `container_t` process gets denied. Equivalent to `:Z` in a manual `podman run -v`.
 - **DNS override (`1.1.1.1` / `8.8.8.8`)** prevents the container from name-resolving Tailscale peers via the host's MagicDNS. Blocks the common prompt-injection-driven recon path. Does not block raw-IP probes to `100.x.x.x` — full network-namespace isolation would be a meaningfully larger change.
 - **`curl … claude.ai/install.sh`** is the current official Claude Code installer (native binary). `npm install -g @anthropic-ai/claude-code` is deprecated as of 2026. Image base intentionally generic — Python or Node projects should set their own image and add features (`node:1`, `python:1`, `rust:1`).
+- **`curl … chatgpt.com/codex/install.sh`** is the official Codex CLI installer (binary in `~/.local/bin`, no Node needed). Its sandboxed modes don't work in this container (bubblewrap can't mount `devpts`), so it can only run commands with `sandbox_mode = "danger-full-access"`; see [the sandbox section](#the-claude-code-codex-plugins-sandbox-is-broken-here--and-how-its-fixed). That is a per-workspace opt-in, not a template default.
+- **`bash -o pipefail`** makes `devpod up` fail when an installer download fails, instead of silently piping an empty script into `sh`.
 
 ### What's deliberately *not* in there
 
@@ -198,6 +200,10 @@ devpod ssh REPO --command "cd /workspaces/content && git remote set-url origin h
 ### Claude Max — per-workspace login
 
 `claude` inside the container, browser device flow on first run, takes ~10s. We tried two pre-auth patterns (env-var passthrough and credentials bind-mount); both were either fragile, undocumented, or now broken by the `/proc/acpi` bug. Per-workspace login is the only setup that's robust to current DevPod/podman behavior.
+
+### Codex — per-workspace login
+
+`codex login --device-auth` once per workspace (device-code flow, ChatGPT subscription). Logins are deliberately not shared between workspaces.
 
 ### Passing API keys into the container (for tools like Aider)
 
