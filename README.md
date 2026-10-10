@@ -187,7 +187,7 @@ What you get for free with `SSH_INJECT_GIT_CREDENTIALS=true` and `SSH_AGENT_FORW
 What you don't get (and the workarounds):
 
 - **`devpod ssh --command "..."` mode does NOT get agent forwarding** — only fully interactive sessions do. If you have a script that needs git auth, use HTTPS remotes; the credential helper works in both modes.
-- **`gh` CLI inside the container is NOT pre-authed.** For `gh pr create`, `gh api`, etc., run `gh auth login` once per workspace (browser device flow, ~10s). It's separate from git auth.
+- **`gh` CLI inside the container is NOT pre-authed**, but it doesn't need its own login: pass it the credential helper's token per command, `GH_TOKEN=$(printf 'protocol=https\nhost=github.com\n\n' | git credential fill | sed -n 's/^password=//p') gh pr create …`. That acts as the host's gh account, like `git push`. Avoid `gh auth login` in the container: its device flow links whichever account the browser is signed in to, not necessarily the bot.
 
 ### Use HTTPS remotes inside the container
 

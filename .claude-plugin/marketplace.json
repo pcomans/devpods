@@ -8,7 +8,7 @@
       "name": "git-credentials",
       "source": "./plugins/git-credentials",
       "description": "How to use DevPod's injected git/gh credentials correctly inside this host's devcontainers",
-      "version": "1.0.0",
+      "version": "1.1.0",
       "author": {
         "name": "pcomans"
       }
