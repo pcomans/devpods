@@ -49,12 +49,17 @@ check, before anything else.
    devcontainer.json likely predates `SSH_INJECT_GIT_CREDENTIALS` being enabled, or credential
    injection was explicitly disabled — that's a devcontainer/host config issue, not something to work
    around from inside the container.
-4. **`gh` is a separate, non-automatic auth path.** It does *not* share the git credential helper.
-   Before `gh pr create`, `gh api`, `gh issue ...`, etc. will work, run `gh auth login` once
-   (interactive browser device-code flow, ~10s). This does not survive a `devpod up --recreate`, so
-   it may be needed again after a rebuild. If `gh` isn't installed at all, that's a missing tool, not
-   a broken credential — install it, don't try to shell out to raw GitHub API calls with a token you
-   found or were given.
+4. **`gh` uses the same credential, passed per command.** `gh` doesn't read the git credential
+   helper on its own, but it doesn't need its own login either: hand it the helper's token inline.
+   ```
+   GH_TOKEN=$(printf 'protocol=https\nhost=github.com\n\n' | git credential fill | sed -n 's/^password=//p') gh pr create ...
+   ```
+   This acts as the host's GitHub account (the bot account), like `git push` does. Prefix each `gh`
+   command this way; don't `export` the token, write it to a file or print it. **Don't run `gh auth
+   login`**: its device flow links whatever account the user's browser is signed in to, usually their
+   personal one, so your PRs and comments would come from the wrong account. If the token comes back
+   empty, it's step 1 (not a `devpod ssh` session). If `gh` isn't installed, that's a missing tool,
+   not a broken credential — install it.
 5. **Test without assuming**: `git fetch`/`git ls-remote` succeeding is *not* evidence that push will
    work if the target repo is public — anonymous, unauthenticated requests succeed for public repos
    over both git and the GitHub API (60 req/hour unauthenticated). Use `git push --dry-run` against a
@@ -67,5 +72,4 @@ check, before anything else.
   `git config`, `git remote -v`, and dry-run git commands — none of which touch a secret. If none of
   those explain the failure, report what you found and stop; don't escalate to reading secrets.
 - Never ask the user to paste a personal access token or API key into the session. If you've reached
-  this point, the fix is almost always "reconnect via `devpod ssh`" or "run `gh auth login`" — not a
-  manually-supplied credential.
+  this point, the fix is almost always "reconnect via `devpod ssh`" — not a manually-supplied credential.
