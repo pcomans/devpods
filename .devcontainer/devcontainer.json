@@ -9,5 +9,9 @@
     "--dns=1.1.1.1",
     "--dns=8.8.8.8"
   ],
-  "postCreateCommand": "bash -o pipefail -c 'curl -fsSL https://claude.ai/install.sh | bash && curl -fsSL https://chatgpt.com/codex/install.sh | sh'"
+  "mounts": [
+    "source=devpods-claude,target=/home/vscode/.claude,type=volume",
+    "source=devpods-codex,target=/home/vscode/.codex,type=volume"
+  ],
+  "postCreateCommand": "bash -o pipefail -c 'sudo chown -R vscode:vscode ~/.claude ~/.codex && curl -fsSL https://claude.ai/install.sh | bash && curl -fsSL https://chatgpt.com/codex/install.sh | sh'"
 }

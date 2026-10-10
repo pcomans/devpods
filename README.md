@@ -148,7 +148,11 @@ Minimal `.devcontainer/devcontainer.json` that works on Bazzite (rootless Podman
     "--dns=1.1.1.1",
     "--dns=8.8.8.8"
   ],
-  "postCreateCommand": "bash -o pipefail -c 'curl -fsSL https://claude.ai/install.sh | bash && curl -fsSL https://chatgpt.com/codex/install.sh | sh'"
+  "mounts": [
+    "source=devpods-claude,target=/home/vscode/.claude,type=volume",
+    "source=devpods-codex,target=/home/vscode/.codex,type=volume"
+  ],
+  "postCreateCommand": "bash -o pipefail -c 'sudo chown -R vscode:vscode ~/.claude ~/.codex && curl -fsSL https://claude.ai/install.sh | bash && curl -fsSL https://chatgpt.com/codex/install.sh | sh'"
 }
 ```
 
@@ -158,6 +162,7 @@ Things to know:
 - **DNS override (`1.1.1.1` / `8.8.8.8`)** prevents the container from name-resolving Tailscale peers via the host's MagicDNS. Blocks the common prompt-injection-driven recon path. Does not block raw-IP probes to `100.x.x.x` — full network-namespace isolation would be a meaningfully larger change.
 - **`curl … claude.ai/install.sh`** is the current official Claude Code installer (native binary). `npm install -g @anthropic-ai/claude-code` is deprecated as of 2026. Image base intentionally generic — Python or Node projects should set their own image and add features (`node:1`, `python:1`, `rust:1`).
 - **`curl … chatgpt.com/codex/install.sh`** is the official Codex CLI installer (binary in `~/.local/bin`, no Node needed). Its sandboxed modes don't work in this container (bubblewrap can't mount `devpts`), so it can only run commands with `sandbox_mode = "danger-full-access"`; see [the sandbox section](#the-claude-code-codex-plugins-sandbox-is-broken-here--and-how-its-fixed). That is a per-workspace opt-in, not a template default.
+- **Agent history lives on named volumes.** `~/.claude` (Claude Code transcripts, plugins, login) and `~/.codex` (Codex sessions, login) are otherwise part of the container filesystem, which `--recreate` and `devpod delete` destroy. Rename the volumes per project (`<project>-claude`, `<project>-codex`) — DevPod 0.6.x has no `${devcontainerId}`, and every git workspace's folder is called `content`, so a shared name would mix projects' histories. New volumes are root-owned, hence the `chown`. `devpod delete` leaves the volumes; `podman volume rm` them when a project is really gone. Verified October 2026: markers survive `devpod up --recreate`, no `/proc/acpi` error.
 - **`bash -o pipefail`** makes `devpod up` fail when an installer download fails, instead of silently piping an empty script into `sh`.
 
 ### What's deliberately *not* in there
@@ -169,7 +174,7 @@ Things to know:
 | `containerEnv` with `${localEnv:...}` | Triggers `/proc/acpi`. |
 | `--security-opt=no-new-privileges` | Blocks `sudo` (sudo needs setuid to escalate). Agent-in-container workflows that `sudo apt install <dep>` need sudo. |
 | `runArgs: [--env=NAME]` | Triggers `/proc/acpi`. |
-| Bind-mount of a host secrets file | Triggers `/proc/acpi`. (Even hardcoded source path — it's adding *any* extra mount that fires the bug.) |
+| Bind-mount of a host secrets file | Triggers `/proc/acpi`. (Even hardcoded source path — it's adding *any* extra mount that fires the bug.) As of October 2026 named-volume mounts work again (see the history volumes above); secrets still stay out of the container. |
 
 ---
 
@@ -382,7 +387,7 @@ devpod up REPO --id REPO                   # start (or create) a workspace
 devpod ssh REPO                            # interactive shell in
 devpod stop REPO                           # stop without destroying
 devpod delete REPO                         # destroy
-devpod up REPO --recreate                  # rebuild container, keep source
+devpod up REPO --recreate                  # rebuild container, keep source; wipes $HOME except volumes
 devpod up REPO --reset                     # nuke everything, fresh clone
 
 # Inspect / clean podman state:
