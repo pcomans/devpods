@@ -163,6 +163,19 @@ Things to know:
 - **`curl … claude.ai/install.sh`** is the current official Claude Code installer (native binary). `npm install -g @anthropic-ai/claude-code` is deprecated as of 2026. Image base intentionally generic — Python or Node projects should set their own image and add features (`node:1`, `python:1`, `rust:1`).
 - **`curl … chatgpt.com/codex/install.sh`** is the official Codex CLI installer (binary in `~/.local/bin`, no Node needed). Its sandboxed modes don't work in this container (bubblewrap can't mount `devpts`), so it can only run commands with `sandbox_mode = "danger-full-access"`; see [the sandbox section](#the-claude-code-codex-plugins-sandbox-is-broken-here--and-how-its-fixed). That is a per-workspace opt-in, not a template default.
 - **Agent history lives on named volumes.** `~/.claude` (Claude Code transcripts, plugins, login) and `~/.codex` (Codex sessions, login) are otherwise part of the container filesystem, which `--recreate` and `devpod delete` destroy. Rename the volumes per project (`<project>-claude`, `<project>-codex`) — DevPod 0.6.x has no `${devcontainerId}`, and every git workspace's folder is called `content`, so a shared name would mix projects' histories. New volumes are root-owned, hence the `chown`. `devpod delete` leaves the volumes; `podman volume rm` them when a project is really gone. Verified October 2026: markers survive `devpod up --recreate`, no `/proc/acpi` error.
+- **Adopting the volumes in an existing workspace:** the first `--recreate` after adding them starts with empty volumes and destroys the old container, so copy the history over first. Stop the workspace so nothing is writing, copy, then recreate:
+  ```bash
+  WS=hapi; P=hapi    # workspace name, volume prefix from its devcontainer.json
+  devpod stop $WS
+  uid=$(grep -o '"uid":"[^"]*"' ~/.devpod/agent/contexts/default/workspaces/$WS/workspace.json | cut -d'"' -f4)
+  C=$(podman ps -aq --filter label=dev.containers.id=$uid)
+  for d in claude codex; do
+    podman volume create $P-$d
+    podman cp $C:/home/vscode/.$d - | podman run --rm -i --user 0 -v $P-$d:/dst $(podman inspect $C --format '{{.Image}}') tar -x -C /dst --strip-components=1
+  done
+  devpod up $WS --recreate    # postCreate's chown fixes ownership
+  ```
+  `~/.claude.json` (settings, not history) sits outside `~/.claude`; Claude warns on first start and names the backup in `~/.claude/backups/` to restore. Pick the newest one from *before* the recreate — postCreate writes a fresh, near-empty one.
 - **`bash -o pipefail`** makes `devpod up` fail when an installer download fails, instead of silently piping an empty script into `sh`.
 
 ### What's deliberately *not* in there
